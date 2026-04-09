@@ -59,6 +59,21 @@ begin
   File.write(summary_file, summary)
   puts summary_file
 
+  # Step 2.5: Translate transcript if not Traditional Chinese
+  sentences = nil
+  translated_sentences = nil
+  unless LlmClient::TRADITIONAL_CHINESE_LANGS.include?(options[:lang])
+    begin
+      lines = transcript.split("\n").map(&:strip).reject(&:empty?)
+      translated_sentences = llm.translate_sentences(lines, "zh-TW")
+      sentences = lines
+    rescue LlmClient::Error => e
+      $stderr.puts "WARNING: Translation failed, using single-language transcript: #{e.message}"
+      sentences = nil
+      translated_sentences = nil
+    end
+  end
+
   # Step 3: Upload to Notion
   notion = NotionClient.new(ENV["NOTION_API_KEY"], ENV["NOTION_DATABASE_ID"])
   page_url = notion.create_page(
@@ -67,7 +82,9 @@ begin
     youtube_url: url,
     summary: summary,
     detail_note: detail_note,
-    transcript: transcript
+    transcript: transcript,
+    sentences: sentences,
+    translated_sentences: translated_sentences
   )
   puts page_url
 

@@ -171,6 +171,101 @@ RSpec.describe NotionClient do
       }
     end
 
+    it "builds a dual-language table when sentences and translated_sentences are provided" do
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "full text",
+        sentences: ["hello", "world"],
+        translated_sentences: ["你好", "世界"]
+      )
+
+      expect(WebMock).to have_requested(:post, notion_api).with { |req|
+        body = JSON.parse(req.body)
+        toggle = body["children"].last
+
+        toggle["heading_2"]["is_toggleable"] == true &&
+          toggle["heading_2"]["children"][0]["type"] == "table" &&
+          toggle["heading_2"]["children"][0]["table"]["table_width"] == 2 &&
+          toggle["heading_2"]["children"][0]["table"]["has_column_header"] == true
+      }
+    end
+
+    it "includes header row and data rows in dual-language table" do
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "full text",
+        sentences: ["hello"],
+        translated_sentences: ["你好"]
+      )
+
+      expect(WebMock).to have_requested(:post, notion_api).with { |req|
+        body = JSON.parse(req.body)
+        toggle = body["children"].last
+        table = toggle["heading_2"]["children"][0]
+        rows = table["table"]["children"]
+
+        rows.length == 2 &&
+          rows[0]["table_row"]["cells"][0][0]["text"]["content"] == "Original" &&
+          rows[0]["table_row"]["cells"][1][0]["text"]["content"] == "繁體中文" &&
+          rows[1]["table_row"]["cells"][0][0]["text"]["content"] == "hello" &&
+          rows[1]["table_row"]["cells"][1][0]["text"]["content"] == "你好"
+      }
+    end
+
+    it "chunks dual-language table at 99 data rows" do
+      sentences = (1..150).map { |i| "line #{i}" }
+      translated = (1..150).map { |i| "翻譯 #{i}" }
+
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "full text",
+        sentences: sentences,
+        translated_sentences: translated
+      )
+
+      expect(WebMock).to have_requested(:post, notion_api).with { |req|
+        body = JSON.parse(req.body)
+        toggle = body["children"].last
+        tables = toggle["heading_2"]["children"]
+
+        tables.length == 2 &&
+          tables[0]["type"] == "table" &&
+          tables[0]["table"]["children"].length == 100 &&
+          tables[1]["type"] == "table" &&
+          tables[1]["table"]["children"].length == 52
+      }
+    end
+
+    it "falls back to paragraph blocks when no translation provided" do
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "The full transcript content"
+      )
+
+      expect(WebMock).to have_requested(:post, notion_api).with { |req|
+        body = JSON.parse(req.body)
+        toggle = body["children"].last
+
+        toggle["heading_2"]["children"][0]["type"] == "paragraph"
+      }
+    end
+
     it "raises error when Notion API returns non-200" do
       stub_request(:post, notion_api)
         .to_return(
