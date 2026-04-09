@@ -5,6 +5,8 @@ class LlmClient
   class Error < StandardError; end
 
   SUPPORTED_TOOLS = %w[claude codex gemini].freeze
+  TRADITIONAL_CHINESE_LANGS = %w[zh-TW zh-Hant zh-HK].freeze
+  TRANSLATION_BATCH_SIZE = 50
 
   def initialize(cli_tool)
     unless SUPPORTED_TOOLS.include?(cli_tool)
@@ -48,6 +50,15 @@ class LlmClient
     generate(prompt, transcript)
   end
 
+  def translate_sentences(sentences, target_lang)
+    results = []
+    sentences.each_slice(TRANSLATION_BATCH_SIZE) do |batch|
+      translated = translate_batch(batch, target_lang)
+      results.concat(translated)
+    end
+    results
+  end
+
   def generate_detail_note(transcript, lang)
     prompt = case lang
              when "zh-TW" then "用繁體中文將以下影片逐字稿整理成結構化筆記，包含標題、重點摘要、分段說明與要點列表"
@@ -58,6 +69,28 @@ class LlmClient
   end
 
   private
+
+  def translate_batch(batch, target_lang, retries: 1)
+    numbered_input = batch.each_with_index.map { |line, i| "#{i + 1}. #{line}" }.join("\n")
+
+    prompt = if target_lang == "zh-TW"
+               "將以下編號的每一行翻譯成繁體中文。保持相同的編號和行數，每行一個翻譯。只輸出翻譯結果，保留編號格式。"
+             else
+               "Translate each numbered line to #{target_lang}. Keep the same numbering and line count. Output only translations, preserving the number format."
+             end
+
+    output = generate(prompt, numbered_input)
+    parsed = output.lines.map { |l| l.strip.sub(/^\d+\.\s*/, "") }.reject(&:empty?)
+
+    if parsed.length != batch.length
+      if retries > 0
+        return translate_batch(batch, target_lang, retries: retries - 1)
+      end
+      raise Error, "Translation line count mismatch: expected #{batch.length}, got #{parsed.length}"
+    end
+
+    parsed
+  end
 
   def build_command(prompt)
     escaped_prompt = Shellwords.escape(prompt)

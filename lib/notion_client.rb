@@ -11,14 +11,15 @@ class NotionClient
   NOTION_VERSION = "2022-06-28"
   MAX_TEXT_LENGTH = 2000
   MAX_CHILDREN_PER_REQUEST = 100
+  MAX_TABLE_DATA_ROWS = 99
 
   def initialize(api_key, database_id)
     @api_key = api_key
     @database_id = database_id
   end
 
-  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:)
-    children = build_children(youtube_url, summary, detail_note, transcript)
+  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, sentences: nil, translated_sentences: nil)
+    children = build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
 
     initial_children = children.first(MAX_CHILDREN_PER_REQUEST)
     overflow_children = children[MAX_CHILDREN_PER_REQUEST..]
@@ -58,7 +59,7 @@ class NotionClient
     }
   end
 
-  def build_children(youtube_url, summary, detail_note, transcript)
+  def build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
     children = []
     children << video_block(youtube_url)
     children << heading_block("Summary")
@@ -67,7 +68,11 @@ class NotionClient
     children << heading_block("Detail Note")
     children.concat(MarkdownToNotion.convert(detail_note))
     children << divider_block
-    children << toggle_heading_block("Full Transcript", text_blocks(transcript))
+    if sentences && translated_sentences
+      children << toggle_heading_block("Full Transcript", transcript_table_blocks(sentences, translated_sentences))
+    else
+      children << toggle_heading_block("Full Transcript", text_blocks(transcript))
+    end
     children
   end
 
@@ -118,6 +123,48 @@ class NotionClient
           "rich_text" => [{ "type" => "text", "text" => { "content" => chunk } }]
         }
       }
+    end
+  end
+
+  def transcript_table_blocks(sentences, translated_sentences)
+    pairs = sentences.zip(translated_sentences)
+    tables = []
+
+    pairs.each_slice(MAX_TABLE_DATA_ROWS) do |chunk|
+      header = table_row_block("Original", "繁體中文")
+      data_rows = chunk.map { |orig, trans| table_row_block(orig, trans) }
+
+      tables << {
+        "object" => "block",
+        "type" => "table",
+        "table" => {
+          "table_width" => 2,
+          "has_column_header" => true,
+          "has_row_header" => false,
+          "children" => [header] + data_rows
+        }
+      }
+    end
+
+    tables
+  end
+
+  def table_row_block(cell1, cell2)
+    {
+      "object" => "block",
+      "type" => "table_row",
+      "table_row" => {
+        "cells" => [
+          rich_text_cell(cell1),
+          rich_text_cell(cell2)
+        ]
+      }
+    }
+  end
+
+  def rich_text_cell(text)
+    split_text(text).map do |chunk|
+      { "type" => "text", "text" => { "content" => chunk } }
     end
   end
 
