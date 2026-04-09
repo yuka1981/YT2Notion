@@ -48,6 +48,7 @@ begin
   # Step 1: Transcribe
   transcriber = Transcriber.new(ENV["TRANSCRIBE_API_URL"])
   transcript = transcriber.transcribe(url, options[:lang])
+  upload_date = transcriber.fetch_upload_date(url)
   File.write(transcript_file, transcript)
   puts transcript_file
 
@@ -84,7 +85,8 @@ begin
     detail_note: detail_note,
     transcript: transcript,
     sentences: sentences,
-    translated_sentences: translated_sentences
+    translated_sentences: translated_sentences,
+    upload_date: upload_date
   )
   puts page_url
 

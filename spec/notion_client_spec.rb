@@ -266,6 +266,43 @@ RSpec.describe NotionClient do
       }
     end
 
+    it "includes Upload Date property when upload_date is provided" do
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "Transcript",
+        upload_date: "2024-03-15"
+      )
+
+      expect(WebMock).to have_requested(:post, notion_api).with { |req|
+        body = JSON.parse(req.body)
+        props = body["properties"]
+
+        props["Upload Date"]["date"]["start"] == "2024-03-15"
+      }
+    end
+
+    it "omits Upload Date property when upload_date is nil" do
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "Transcript"
+      )
+
+      expect(WebMock).to have_requested(:post, notion_api).with { |req|
+        body = JSON.parse(req.body)
+        props = body["properties"]
+
+        !props.key?("Upload Date")
+      }
+    end
+
     it "raises error when Notion API returns non-200" do
       stub_request(:post, notion_api)
         .to_return(
