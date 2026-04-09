@@ -1,0 +1,4 @@
+.env
+transcript_*.txt
+summary_*.txt
+.ruby-lsp/
