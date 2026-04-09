@@ -43,4 +43,35 @@ RSpec.describe Transcriber do
       }.to raise_error(Transcriber::Error, /No transcript text/)
     end
   end
+
+  describe "#fetch_upload_date" do
+    let(:youtube_url) { "https://www.youtube.com/watch?v=abc123" }
+
+    it "extracts upload date from YouTube page" do
+      stub_request(:get, youtube_url)
+        .to_return(
+          status: 200,
+          body: '<script>{"uploadDate":"2024-03-15T10:00:00-07:00"}</script>'
+        )
+
+      result = transcriber.fetch_upload_date(youtube_url)
+      expect(result).to eq("2024-03-15")
+    end
+
+    it "returns nil when YouTube page is not accessible" do
+      stub_request(:get, youtube_url)
+        .to_return(status: 404, body: "Not Found")
+
+      result = transcriber.fetch_upload_date(youtube_url)
+      expect(result).to be_nil
+    end
+
+    it "returns nil when uploadDate is not found in page" do
+      stub_request(:get, youtube_url)
+        .to_return(status: 200, body: "<html>no date here</html>")
+
+      result = transcriber.fetch_upload_date(youtube_url)
+      expect(result).to be_nil
+    end
+  end
 end

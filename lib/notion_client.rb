@@ -18,7 +18,7 @@ class NotionClient
     @database_id = database_id
   end
 
-  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, sentences: nil, translated_sentences: nil)
+  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, sentences: nil, translated_sentences: nil, upload_date: nil)
     children = build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
 
     initial_children = children.first(MAX_CHILDREN_PER_REQUEST)
@@ -26,7 +26,7 @@ class NotionClient
 
     body = {
       parent: { database_id: @database_id },
-      properties: build_properties(title, category),
+      properties: build_properties(title, category, upload_date),
       children: initial_children
     }
 
@@ -48,8 +48,8 @@ class NotionClient
 
   private
 
-  def build_properties(title, category)
-    {
+  def build_properties(title, category, upload_date)
+    props = {
       "Doc name" => {
         "title" => [{ "text" => { "content" => title } }]
       },
@@ -57,6 +57,14 @@ class NotionClient
         "multi_select" => [{ "name" => category }]
       }
     }
+
+    if upload_date
+      props["Upload Date"] = {
+        "date" => { "start" => upload_date }
+      }
+    end
+
+    props
   end
 
   def build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
