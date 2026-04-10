@@ -50,13 +50,27 @@ class LlmClient
     generate(prompt, transcript)
   end
 
-  def translate_sentences(sentences, target_lang)
-    results = []
-    sentences.each_slice(TRANSLATION_BATCH_SIZE) do |batch|
-      translated = translate_batch(batch, target_lang)
-      results.concat(translated)
+  def merge_to_paragraphs(lines)
+    paragraphs = []
+    lines.each_slice(TRANSLATION_BATCH_SIZE) do |batch|
+      input = batch.join("\n")
+      prompt = "將以下逐字稿的短句合併成自然的段落，段落之間用空行分隔。不要改變原文的用詞。"
+      output = generate(prompt, input)
+      batch_paragraphs = output.split(/\n\s*\n/).map(&:strip).reject(&:empty?)
+      paragraphs.concat(batch_paragraphs)
     end
-    results
+    paragraphs
+  end
+
+  def translate_paragraphs(paragraphs, target_lang)
+    paragraphs.map do |paragraph|
+      prompt = if target_lang == "zh-TW"
+                 "將以下文字翻譯成繁體中文。只輸出翻譯結果。"
+               else
+                 "Translate the following text into #{target_lang}. Output only the translation."
+               end
+      generate(prompt, paragraph)
+    end
   end
 
   def generate_detail_note(transcript, lang)
@@ -69,28 +83,6 @@ class LlmClient
   end
 
   private
-
-  def translate_batch(batch, target_lang, retries: 1)
-    numbered_input = batch.each_with_index.map { |line, i| "#{i + 1}. #{line}" }.join("\n")
-
-    prompt = if target_lang == "zh-TW"
-               "將以下編號的每一行翻譯成繁體中文。保持相同的編號和行數，每行一個翻譯。只輸出翻譯結果，保留編號格式。"
-             else
-               "Translate each numbered line to #{target_lang}. Keep the same numbering and line count. Output only translations, preserving the number format."
-             end
-
-    output = generate(prompt, numbered_input)
-    parsed = output.lines.map { |l| l.strip.sub(/^\d+\.\s*/, "") }.reject(&:empty?)
-
-    if parsed.length != batch.length
-      if retries > 0
-        return translate_batch(batch, target_lang, retries: retries - 1)
-      end
-      raise Error, "Translation line count mismatch: expected #{batch.length}, got #{parsed.length}"
-    end
-
-    parsed
-  end
 
   def build_command(prompt)
     escaped_prompt = Shellwords.escape(prompt)
