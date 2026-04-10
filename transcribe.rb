@@ -60,18 +60,18 @@ begin
   File.write(summary_file, summary)
   puts summary_file
 
-  # Step 2.5: Translate transcript if not Traditional Chinese
-  sentences = nil
-  translated_sentences = nil
+  # Step 2.5: Merge and translate transcript if not Traditional Chinese
+  paragraphs = nil
+  translated_paragraphs = nil
   unless LlmClient::TRADITIONAL_CHINESE_LANGS.include?(options[:lang])
     begin
       lines = transcript.split("\n").map(&:strip).reject(&:empty?)
-      translated_sentences = llm.translate_sentences(lines, "zh-TW")
-      sentences = lines
+      paragraphs = llm.merge_to_paragraphs(lines)
+      translated_paragraphs = llm.translate_paragraphs(paragraphs, "zh-TW")
     rescue LlmClient::Error => e
       $stderr.puts "WARNING: Translation failed, using single-language transcript: #{e.message}"
-      sentences = nil
-      translated_sentences = nil
+      paragraphs = nil
+      translated_paragraphs = nil
     end
   end
 
@@ -84,8 +84,8 @@ begin
     summary: summary,
     detail_note: detail_note,
     transcript: transcript,
-    sentences: sentences,
-    translated_sentences: translated_sentences,
+    paragraphs: paragraphs,
+    translated_paragraphs: translated_paragraphs,
     upload_date: upload_date
   )
   puts page_url
