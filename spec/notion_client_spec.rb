@@ -5,6 +5,7 @@ RSpec.describe NotionClient do
   let(:database_id) { "db-123" }
   let(:client) { NotionClient.new(api_key, database_id) }
   let(:notion_api) { "https://api.notion.com/v1/pages" }
+  let(:notion_blocks_api) { "https://api.notion.com/v1/blocks" }
 
   before do
     stub_request(:post, notion_api)
@@ -12,6 +13,20 @@ RSpec.describe NotionClient do
         status: 200,
         body: { object: "page", id: "page-abc-123", url: "https://www.notion.so/page-abc-123" }.to_json,
         headers: { "Content-Type" => "application/json" }
+      )
+
+    stub_request(:patch, %r{#{notion_blocks_api}/.+/children})
+      .to_return(status: 200, body: "{}".to_json)
+
+    stub_request(:get, %r{#{notion_blocks_api}/.+/children})
+      .to_return(
+        status: 200,
+        body: {
+          results: [
+            { "id" => "toggle-block-id", "type" => "heading_2", "heading_2" => { "is_toggleable" => true } }
+          ],
+          has_more: false
+        }.to_json
       )
   end
 
@@ -171,84 +186,7 @@ RSpec.describe NotionClient do
       }
     end
 
-    it "builds a dual-language table when sentences and translated_sentences are provided" do
-      client.create_page(
-        title: "Title",
-        category: "YouTube Note",
-        youtube_url: youtube_url,
-        summary: "Summary",
-        detail_note: "Notes",
-        transcript: "full text",
-        sentences: ["hello", "world"],
-        translated_sentences: ["你好", "世界"]
-      )
-
-      expect(WebMock).to have_requested(:post, notion_api).with { |req|
-        body = JSON.parse(req.body)
-        toggle = body["children"].last
-
-        toggle["heading_2"]["is_toggleable"] == true &&
-          toggle["heading_2"]["children"][0]["type"] == "table" &&
-          toggle["heading_2"]["children"][0]["table"]["table_width"] == 2 &&
-          toggle["heading_2"]["children"][0]["table"]["has_column_header"] == true
-      }
-    end
-
-    it "includes header row and data rows in dual-language table" do
-      client.create_page(
-        title: "Title",
-        category: "YouTube Note",
-        youtube_url: youtube_url,
-        summary: "Summary",
-        detail_note: "Notes",
-        transcript: "full text",
-        sentences: ["hello"],
-        translated_sentences: ["你好"]
-      )
-
-      expect(WebMock).to have_requested(:post, notion_api).with { |req|
-        body = JSON.parse(req.body)
-        toggle = body["children"].last
-        table = toggle["heading_2"]["children"][0]
-        rows = table["table"]["children"]
-
-        rows.length == 2 &&
-          rows[0]["table_row"]["cells"][0][0]["text"]["content"] == "Original" &&
-          rows[0]["table_row"]["cells"][1][0]["text"]["content"] == "繁體中文" &&
-          rows[1]["table_row"]["cells"][0][0]["text"]["content"] == "hello" &&
-          rows[1]["table_row"]["cells"][1][0]["text"]["content"] == "你好"
-      }
-    end
-
-    it "chunks dual-language table at 99 data rows" do
-      sentences = (1..150).map { |i| "line #{i}" }
-      translated = (1..150).map { |i| "翻譯 #{i}" }
-
-      client.create_page(
-        title: "Title",
-        category: "YouTube Note",
-        youtube_url: youtube_url,
-        summary: "Summary",
-        detail_note: "Notes",
-        transcript: "full text",
-        sentences: sentences,
-        translated_sentences: translated
-      )
-
-      expect(WebMock).to have_requested(:post, notion_api).with { |req|
-        body = JSON.parse(req.body)
-        toggle = body["children"].last
-        tables = toggle["heading_2"]["children"]
-
-        tables.length == 2 &&
-          tables[0]["type"] == "table" &&
-          tables[0]["table"]["children"].length == 100 &&
-          tables[1]["type"] == "table" &&
-          tables[1]["table"]["children"].length == 52
-      }
-    end
-
-    it "falls back to paragraph blocks when no translation provided" do
+    it "uses paragraph blocks for transcript" do
       client.create_page(
         title: "Title",
         category: "YouTube Note",
@@ -301,6 +239,45 @@ RSpec.describe NotionClient do
 
         !props.key?("Upload Date")
       }
+    end
+
+    it "batches transcript blocks exceeding 1000-block limit into separate requests" do
+      # ~2000 chars per block, so 2_000_000 chars = 1000 paragraph blocks
+      # Plus ~8 other page blocks, this exceeds the 1000 limit
+      long_transcript = "a" * 2_000_000
+
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: long_transcript
+      )
+
+      # Initial POST should have been made
+      expect(WebMock).to have_requested(:post, notion_api).once
+
+      # Toggle block lookup should have been made (overflow exists)
+      expect(WebMock).to have_requested(:get, %r{#{notion_blocks_api}/page-abc-123/children}).at_least_once
+
+      # Overflow transcript should have been appended to the toggle block
+      expect(WebMock).to have_requested(:patch, "#{notion_blocks_api}/toggle-block-id/children").at_least_once
+    end
+
+    it "keeps all transcript in toggle when under 1000-block limit" do
+      client.create_page(
+        title: "Title",
+        category: "YouTube Note",
+        youtube_url: youtube_url,
+        summary: "Summary",
+        detail_note: "Notes",
+        transcript: "Short transcript"
+      )
+
+      # No GET or PATCH needed since everything fits
+      expect(WebMock).not_to have_requested(:get, %r{#{notion_blocks_api}/.+/children})
+      expect(WebMock).not_to have_requested(:patch, %r{#{notion_blocks_api}/.+/children})
     end
 
     it "raises error when Notion API returns non-200" do
