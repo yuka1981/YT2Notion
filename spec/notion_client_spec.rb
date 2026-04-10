@@ -171,7 +171,7 @@ RSpec.describe NotionClient do
       }
     end
 
-    it "builds a dual-language table when sentences and translated_sentences are provided" do
+    it "renders bilingual transcript as stacked toggle sections" do
       client.create_page(
         title: "Title",
         category: "YouTube Note",
@@ -179,22 +179,40 @@ RSpec.describe NotionClient do
         summary: "Summary",
         detail_note: "Notes",
         transcript: "full text",
-        sentences: ["hello", "world"],
-        translated_sentences: ["你好", "世界"]
+        paragraphs: ["Hello world.", "Second paragraph."],
+        translated_paragraphs: ["你好世界。", "第二段。"]
       )
 
       expect(WebMock).to have_requested(:post, notion_api).with { |req|
         body = JSON.parse(req.body)
         toggle = body["children"].last
+        children = toggle["heading_2"]["children"]
 
-        toggle["heading_2"]["is_toggleable"] == true &&
-          toggle["heading_2"]["children"][0]["type"] == "table" &&
-          toggle["heading_2"]["children"][0]["table"]["table_width"] == 2 &&
-          toggle["heading_2"]["children"][0]["table"]["has_column_header"] == true
+        # First child: non-toggleable heading_3 "Original Transcript"
+        children[0]["type"] == "heading_3" &&
+          children[0]["heading_3"]["rich_text"][0]["text"]["content"] == "Original Transcript" &&
+          !children[0]["heading_3"].key?("is_toggleable") &&
+          # Next children: toggle blocks for each original paragraph
+          children[1]["type"] == "toggle" &&
+          children[1]["toggle"]["rich_text"][0]["text"]["content"] == "Hello world." &&
+          children[2]["type"] == "toggle" &&
+          children[2]["toggle"]["rich_text"][0]["text"]["content"] == "Second paragraph." &&
+          # Then: toggleable heading_3 "繁體中文"
+          children[3]["type"] == "heading_3" &&
+          children[3]["heading_3"]["rich_text"][0]["text"]["content"] == "繁體中文" &&
+          children[3]["heading_3"]["is_toggleable"] == true &&
+          # Its children: toggle blocks for each translated paragraph
+          children[3]["heading_3"]["children"][0]["type"] == "toggle" &&
+          children[3]["heading_3"]["children"][0]["toggle"]["rich_text"][0]["text"]["content"] == "你好世界。" &&
+          children[3]["heading_3"]["children"][1]["type"] == "toggle" &&
+          children[3]["heading_3"]["children"][1]["toggle"]["rich_text"][0]["text"]["content"] == "第二段。"
       }
     end
 
-    it "includes header row and data rows in dual-language table" do
+    it "handles many paragraphs without exceeding Notion nested children limit" do
+      paragraphs = (1..50).map { |i| "Paragraph #{i}." }
+      translated = (1..50).map { |i| "翻譯 #{i}。" }
+
       client.create_page(
         title: "Title",
         category: "YouTube Note",
@@ -202,28 +220,27 @@ RSpec.describe NotionClient do
         summary: "Summary",
         detail_note: "Notes",
         transcript: "full text",
-        sentences: ["hello"],
-        translated_sentences: ["你好"]
+        paragraphs: paragraphs,
+        translated_paragraphs: translated
       )
 
       expect(WebMock).to have_requested(:post, notion_api).with { |req|
         body = JSON.parse(req.body)
         toggle = body["children"].last
-        table = toggle["heading_2"]["children"][0]
-        rows = table["table"]["children"]
+        children = toggle["heading_2"]["children"]
 
-        rows.length == 2 &&
-          rows[0]["table_row"]["cells"][0][0]["text"]["content"] == "Original" &&
-          rows[0]["table_row"]["cells"][1][0]["text"]["content"] == "繁體中文" &&
-          rows[1]["table_row"]["cells"][0][0]["text"]["content"] == "hello" &&
-          rows[1]["table_row"]["cells"][1][0]["text"]["content"] == "你好"
+        # heading_3 "Original Transcript" + 50 toggle blocks + heading_3 "繁體中文" = 52 children
+        children.length == 52 &&
+          children[0]["type"] == "heading_3" &&
+          children[1]["type"] == "toggle" &&
+          children[50]["type"] == "toggle" &&
+          children[51]["type"] == "heading_3" &&
+          children[51]["heading_3"]["is_toggleable"] == true &&
+          children[51]["heading_3"]["children"].length == 50
       }
     end
 
-    it "chunks dual-language table at 99 data rows" do
-      sentences = (1..150).map { |i| "line #{i}" }
-      translated = (1..150).map { |i| "翻譯 #{i}" }
-
+    it "toggle blocks have an empty paragraph child" do
       client.create_page(
         title: "Title",
         category: "YouTube Note",
@@ -231,20 +248,20 @@ RSpec.describe NotionClient do
         summary: "Summary",
         detail_note: "Notes",
         transcript: "full text",
-        sentences: sentences,
-        translated_sentences: translated
+        paragraphs: ["Hello world."],
+        translated_paragraphs: ["你好世界。"]
       )
 
       expect(WebMock).to have_requested(:post, notion_api).with { |req|
         body = JSON.parse(req.body)
         toggle = body["children"].last
-        tables = toggle["heading_2"]["children"]
+        children = toggle["heading_2"]["children"]
 
-        tables.length == 2 &&
-          tables[0]["type"] == "table" &&
-          tables[0]["table"]["children"].length == 100 &&
-          tables[1]["type"] == "table" &&
-          tables[1]["table"]["children"].length == 52
+        # Original paragraph toggle block has an empty paragraph child
+        original_toggle = children[1]
+        original_toggle["toggle"]["children"].length == 1 &&
+          original_toggle["toggle"]["children"][0]["type"] == "paragraph" &&
+          original_toggle["toggle"]["children"][0]["paragraph"]["rich_text"][0]["text"]["content"] == " "
       }
     end
 
