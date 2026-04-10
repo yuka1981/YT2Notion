@@ -179,60 +179,84 @@ RSpec.describe LlmClient do
     end
   end
 
-  describe "#translate_sentences" do
-    it "translates a batch of sentences with numbered lines" do
+  describe "#merge_to_paragraphs" do
+    it "sends lines to LLM and returns paragraphs split by blank lines" do
       client = LlmClient.new("claude")
-      allow(client).to receive(:generate).and_return("1. 語言暴力無處不在\n2. 只要有人開口說話的地方")
+      allow(client).to receive(:generate)
+        .and_return("First paragraph merged from lines.\n\nSecond paragraph merged.")
 
-      result = client.translate_sentences(["语言暴力无处不在", "只要有人开口说话的地方"], "zh-TW")
-      expect(result).to eq(["語言暴力無處不在", "只要有人開口說話的地方"])
+      result = client.merge_to_paragraphs(["line one", "line two", "line three", "line four"])
+      expect(result).to eq(["First paragraph merged from lines.", "Second paragraph merged."])
     end
 
-    it "sends numbered lines in the prompt input" do
+    it "uses zh-TW merge prompt" do
       client = LlmClient.new("claude")
-      allow(client).to receive(:generate).and_return("1. Line one\n2. Line two")
+      allow(client).to receive(:generate)
+        .and_return("合併段落")
 
-      client.translate_sentences(["Line one", "Line two"], "zh-TW")
-      expect(client).to have_received(:generate) do |prompt, input|
-        expect(input).to include("1. Line one")
-        expect(input).to include("2. Line two")
+      client.merge_to_paragraphs(["第一行", "第二行"])
+      expect(client).to have_received(:generate) do |prompt, _input|
+        expect(prompt).to include("段落")
       end
     end
 
-    it "handles batches of more than 50 lines" do
+    it "batches lines at TRANSLATION_BATCH_SIZE and collects all paragraphs" do
       client = LlmClient.new("claude")
       lines = (1..75).map { |i| "Line #{i}" }
 
       call_count = 0
-      allow(client).to receive(:generate) do |prompt, input|
+      allow(client).to receive(:generate) do |_prompt, _input|
         call_count += 1
-        numbered = input.lines.map(&:strip).reject(&:empty?)
-        numbered.map { |l| l }.join("\n")
+        "Paragraph from batch #{call_count}."
       end
 
-      result = client.translate_sentences(lines, "zh-TW")
+      result = client.merge_to_paragraphs(lines)
       expect(call_count).to eq(2)
-      expect(result.length).to eq(75)
+      expect(result).to eq(["Paragraph from batch 1.", "Paragraph from batch 2."])
     end
+  end
 
-    it "retries once on line count mismatch then raises" do
+  describe "#translate_paragraphs" do
+    it "translates each paragraph with one LLM call per paragraph" do
       client = LlmClient.new("claude")
-      allow(client).to receive(:generate)
-        .and_return("1. Only one line")
-
-      expect {
-        client.translate_sentences(["line 1", "line 2", "line 3"], "zh-TW")
-      }.to raise_error(LlmClient::Error, /line count mismatch/)
-    end
-
-    it "uses zh-TW prompt" do
-      client = LlmClient.new("claude")
-      allow(client).to receive(:generate).and_return("1. 翻譯")
-
-      client.translate_sentences(["hello"], "zh-TW")
-      expect(client).to have_received(:generate) do |prompt, _input|
-        expect(prompt).to include("翻譯成繁體中文")
+      call_count = 0
+      allow(client).to receive(:generate) do |_prompt, input|
+        call_count += 1
+        "Translated: #{input}"
       end
+
+      result = client.translate_paragraphs(["Para one.", "Para two."], "zh-TW")
+      expect(call_count).to eq(2)
+      expect(result).to eq(["Translated: Para one.", "Translated: Para two."])
+    end
+
+    it "uses zh-TW translation prompt" do
+      client = LlmClient.new("claude")
+      allow(client).to receive(:generate).and_return("翻譯結果")
+
+      client.translate_paragraphs(["Hello world."], "zh-TW")
+      expect(client).to have_received(:generate) do |prompt, _input|
+        expect(prompt).to include("繁體中文")
+      end
+    end
+
+    it "uses generic translation prompt for other languages" do
+      client = LlmClient.new("claude")
+      allow(client).to receive(:generate).and_return("Translated")
+
+      client.translate_paragraphs(["Hello world."], "ja")
+      expect(client).to have_received(:generate) do |prompt, _input|
+        expect(prompt).to include("ja")
+      end
+    end
+
+    it "returns array same length as input" do
+      client = LlmClient.new("claude")
+      allow(client).to receive(:generate).and_return("translated")
+
+      paragraphs = ["p1", "p2", "p3"]
+      result = client.translate_paragraphs(paragraphs, "zh-TW")
+      expect(result.length).to eq(3)
     end
   end
 end
