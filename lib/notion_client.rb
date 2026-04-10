@@ -11,15 +11,15 @@ class NotionClient
   NOTION_VERSION = "2022-06-28"
   MAX_TEXT_LENGTH = 2000
   MAX_CHILDREN_PER_REQUEST = 100
-  MAX_TABLE_DATA_ROWS = 99
+  MAX_BLOCKS_PER_REQUEST = 1000
 
   def initialize(api_key, database_id)
     @api_key = api_key
     @database_id = database_id
   end
 
-  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, sentences: nil, translated_sentences: nil, upload_date: nil)
-    children = build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
+  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, upload_date: nil)
+    children, toggle_overflow = build_children(youtube_url, summary, detail_note, transcript)
 
     initial_children = children.first(MAX_CHILDREN_PER_REQUEST)
     overflow_children = children[MAX_CHILDREN_PER_REQUEST..]
@@ -38,9 +38,15 @@ class NotionClient
       raise Error, "Notion API failed with status #{response.code}: #{message}"
     end
 
+    page_id = data["id"]
+
     if overflow_children && !overflow_children.empty?
-      page_id = data["id"]
       append_children(page_id, overflow_children)
+    end
+
+    if toggle_overflow && !toggle_overflow.empty?
+      toggle_id = find_toggle_block_id(page_id)
+      append_children(toggle_id, toggle_overflow)
     end
 
     data["url"]
@@ -67,7 +73,7 @@ class NotionClient
     props
   end
 
-  def build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
+  def build_children(youtube_url, summary, detail_note, transcript)
     children = []
     children << video_block(youtube_url)
     children << heading_block("Summary")
@@ -76,12 +82,21 @@ class NotionClient
     children << heading_block("Detail Note")
     children.concat(MarkdownToNotion.convert(detail_note))
     children << divider_block
-    if sentences && translated_sentences
-      children << toggle_heading_block("Full Transcript", transcript_table_blocks(sentences, translated_sentences))
+
+    transcript_blocks = text_blocks(transcript)
+
+    # Reserve budget for the toggle heading itself (+1) and other page children
+    used_blocks = count_blocks(children) + 1
+    budget = MAX_BLOCKS_PER_REQUEST - used_blocks
+    initial_transcript, overflow_transcript = split_blocks_by_budget(transcript_blocks, budget)
+
+    if initial_transcript.empty?
+      children << toggle_heading_block_empty("Full Transcript")
     else
-      children << toggle_heading_block("Full Transcript", text_blocks(transcript))
+      children << toggle_heading_block("Full Transcript", initial_transcript)
     end
-    children
+
+    [children, overflow_transcript]
   end
 
   def heading_block(text)
@@ -102,6 +117,17 @@ class NotionClient
         "rich_text" => [{ "type" => "text", "text" => { "content" => text } }],
         "is_toggleable" => true,
         "children" => children_blocks
+      }
+    }
+  end
+
+  def toggle_heading_block_empty(text)
+    {
+      "object" => "block",
+      "type" => "heading_2",
+      "heading_2" => {
+        "rich_text" => [{ "type" => "text", "text" => { "content" => text } }],
+        "is_toggleable" => true
       }
     }
   end
@@ -134,48 +160,6 @@ class NotionClient
     end
   end
 
-  def transcript_table_blocks(sentences, translated_sentences)
-    pairs = sentences.zip(translated_sentences)
-    tables = []
-
-    pairs.each_slice(MAX_TABLE_DATA_ROWS) do |chunk|
-      header = table_row_block("Original", "繁體中文")
-      data_rows = chunk.map { |orig, trans| table_row_block(orig, trans) }
-
-      tables << {
-        "object" => "block",
-        "type" => "table",
-        "table" => {
-          "table_width" => 2,
-          "has_column_header" => true,
-          "has_row_header" => false,
-          "children" => [header] + data_rows
-        }
-      }
-    end
-
-    tables
-  end
-
-  def table_row_block(cell1, cell2)
-    {
-      "object" => "block",
-      "type" => "table_row",
-      "table_row" => {
-        "cells" => [
-          rich_text_cell(cell1),
-          rich_text_cell(cell2)
-        ]
-      }
-    }
-  end
-
-  def rich_text_cell(text)
-    split_text(text).map do |chunk|
-      { "type" => "text", "text" => { "content" => chunk } }
-    end
-  end
-
   def split_text(text)
     return [text] if text.length <= MAX_TEXT_LENGTH
 
@@ -189,14 +173,102 @@ class NotionClient
     chunks
   end
 
-  def append_children(block_id, children)
-    children.each_slice(MAX_CHILDREN_PER_REQUEST) do |batch|
-      url = "#{NOTION_BLOCKS_URL}/#{block_id}/children"
-      response = patch_request(url, { children: batch })
-      unless response.code.to_i == 200
-        raise Error, "Notion API failed appending blocks: #{response.code}"
+  def count_blocks(blocks)
+    blocks.sum do |block|
+      count = 1
+      %w[heading_1 heading_2 heading_3 table].each do |type|
+        nested = block.dig(type, "children")
+        if nested
+          count += count_blocks(nested)
+          break
+        end
+      end
+      count
+    end
+  end
+
+  def split_blocks_by_budget(blocks, budget)
+    initial = []
+    overflow = []
+    used = 0
+
+    blocks.each do |block|
+      bc = count_blocks([block])
+      if used + bc <= budget
+        initial << block
+        used += bc
+      else
+        overflow << block
       end
     end
+
+    [initial, overflow]
+  end
+
+  def append_children(block_id, children)
+    batch = []
+    batch_count = 0
+
+    children.each do |child|
+      child_count = count_blocks([child])
+
+      if !batch.empty? && (batch.size >= MAX_CHILDREN_PER_REQUEST || batch_count + child_count > MAX_BLOCKS_PER_REQUEST)
+        flush_append(block_id, batch)
+        batch = []
+        batch_count = 0
+      end
+
+      batch << child
+      batch_count += child_count
+    end
+
+    flush_append(block_id, batch) unless batch.empty?
+  end
+
+  def flush_append(block_id, batch)
+    url = "#{NOTION_BLOCKS_URL}/#{block_id}/children"
+    response = patch_request(url, { children: batch })
+    unless response.code.to_i == 200
+      data = JSON.parse(response.body)
+      message = data["message"] || response.body
+      raise Error, "Notion API failed appending blocks: #{message}"
+    end
+  end
+
+  def find_toggle_block_id(page_id)
+    cursor = nil
+    last_toggle_id = nil
+
+    loop do
+      url = "#{NOTION_BLOCKS_URL}/#{page_id}/children?page_size=100"
+      url += "&start_cursor=#{cursor}" if cursor
+      response = get_request(url)
+      data = JSON.parse(response.body)
+
+      data["results"].each do |block|
+        if block["type"] == "heading_2" && block.dig("heading_2", "is_toggleable")
+          last_toggle_id = block["id"]
+        end
+      end
+
+      break unless data["has_more"]
+      cursor = data["next_cursor"]
+    end
+
+    raise Error, "Could not find toggle block for appending transcript" unless last_toggle_id
+    last_toggle_id
+  end
+
+  def get_request(url)
+    uri = URI(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true
+
+    request = Net::HTTP::Get.new(uri.request_uri)
+    request["Authorization"] = "Bearer #{@api_key}"
+    request["Notion-Version"] = NOTION_VERSION
+
+    http.request(request)
   end
 
   def patch_request(url, body)
