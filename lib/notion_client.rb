@@ -11,15 +11,14 @@ class NotionClient
   NOTION_VERSION = "2022-06-28"
   MAX_TEXT_LENGTH = 2000
   MAX_CHILDREN_PER_REQUEST = 100
-  MAX_TABLE_DATA_ROWS = 99
 
   def initialize(api_key, database_id)
     @api_key = api_key
     @database_id = database_id
   end
 
-  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, sentences: nil, translated_sentences: nil, upload_date: nil)
-    children = build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
+  def create_page(title:, category:, youtube_url:, summary:, detail_note:, transcript:, paragraphs: nil, translated_paragraphs: nil, upload_date: nil)
+    children = build_children(youtube_url, summary, detail_note, transcript, paragraphs, translated_paragraphs)
 
     initial_children = children.first(MAX_CHILDREN_PER_REQUEST)
     overflow_children = children[MAX_CHILDREN_PER_REQUEST..]
@@ -67,7 +66,7 @@ class NotionClient
     props
   end
 
-  def build_children(youtube_url, summary, detail_note, transcript, sentences, translated_sentences)
+  def build_children(youtube_url, summary, detail_note, transcript, paragraphs, translated_paragraphs)
     children = []
     children << video_block(youtube_url)
     children << heading_block("Summary")
@@ -76,8 +75,8 @@ class NotionClient
     children << heading_block("Detail Note")
     children.concat(MarkdownToNotion.convert(detail_note))
     children << divider_block
-    if sentences && translated_sentences
-      children << toggle_heading_block("Full Transcript", transcript_table_blocks(sentences, translated_sentences))
+    if paragraphs && translated_paragraphs
+      children << toggle_heading_block("Full Transcript", bilingual_transcript_blocks(paragraphs, translated_paragraphs))
     else
       children << toggle_heading_block("Full Transcript", text_blocks(transcript))
     end
@@ -134,46 +133,58 @@ class NotionClient
     end
   end
 
-  def transcript_table_blocks(sentences, translated_sentences)
-    pairs = sentences.zip(translated_sentences)
-    tables = []
+  def bilingual_transcript_blocks(paragraphs, translated_paragraphs)
+    translated_toggles = translated_paragraphs.map { |p| toggle_block(p) }
+    translated_section = toggle_heading_3_block("繁體中文", translated_toggles)
 
-    pairs.each_slice(MAX_TABLE_DATA_ROWS) do |chunk|
-      header = table_row_block("Original", "繁體中文")
-      data_rows = chunk.map { |orig, trans| table_row_block(orig, trans) }
-
-      tables << {
-        "object" => "block",
-        "type" => "table",
-        "table" => {
-          "table_width" => 2,
-          "has_column_header" => true,
-          "has_row_header" => false,
-          "children" => [header] + data_rows
-        }
-      }
-    end
-
-    tables
+    blocks = []
+    blocks << heading_3_block("Original Transcript")
+    blocks.concat(paragraphs.map { |p| toggle_block(p) })
+    blocks << translated_section
+    blocks
   end
 
-  def table_row_block(cell1, cell2)
+  def heading_3_block(text)
     {
       "object" => "block",
-      "type" => "table_row",
-      "table_row" => {
-        "cells" => [
-          rich_text_cell(cell1),
-          rich_text_cell(cell2)
-        ]
+      "type" => "heading_3",
+      "heading_3" => {
+        "rich_text" => [{ "type" => "text", "text" => { "content" => text } }]
       }
     }
   end
 
-  def rich_text_cell(text)
-    split_text(text).map do |chunk|
-      { "type" => "text", "text" => { "content" => chunk } }
-    end
+  def toggle_heading_3_block(text, children_blocks)
+    {
+      "object" => "block",
+      "type" => "heading_3",
+      "heading_3" => {
+        "rich_text" => [{ "type" => "text", "text" => { "content" => text } }],
+        "is_toggleable" => true,
+        "children" => children_blocks
+      }
+    }
+  end
+
+  def toggle_block(text)
+    {
+      "object" => "block",
+      "type" => "toggle",
+      "toggle" => {
+        "rich_text" => split_text(text).map { |chunk|
+          { "type" => "text", "text" => { "content" => chunk } }
+        },
+        "children" => [
+          {
+            "object" => "block",
+            "type" => "paragraph",
+            "paragraph" => {
+              "rich_text" => [{ "type" => "text", "text" => { "content" => " " } }]
+            }
+          }
+        ]
+      }
+    }
   end
 
   def split_text(text)
