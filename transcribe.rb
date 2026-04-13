@@ -10,7 +10,8 @@ require_relative "lib/notion_client"
 options = {
   lang: "zh",
   summary_lang: "zh-TW",
-  cli: "claude"
+  cli: "claude",
+  category: "Youtube"
 }
 
 parser = OptionParser.new do |opts|
@@ -19,6 +20,7 @@ parser = OptionParser.new do |opts|
   opts.on("--lang LANG", "Transcription language (default: zh)") { |v| options[:lang] = v }
   opts.on("--summary-lang LANG", "Summary language (default: zh-TW)") { |v| options[:summary_lang] = v }
   opts.on("--cli TOOL", "CLI tool: claude, codex, gemini (default: claude)") { |v| options[:cli] = v }
+  opts.on("--category CATEGORY", "Notion category (default: Youtube)") { |v| options[:category] = v }
   opts.on("-h", "--help", "Show help") do
     puts opts
     exit
@@ -64,7 +66,7 @@ begin
   notion = NotionClient.new(ENV["NOTION_API_KEY"], ENV["NOTION_DATABASE_ID"])
   page_url = notion.create_page(
     title: title,
-    category: "YouTube Note",
+    category: options[:category],
     youtube_url: url,
     summary: summary,
     detail_note: detail_note,
